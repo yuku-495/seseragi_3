@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>せせらぎ</title>
+  <style>
+    /* ★ Google Fonts から「Zen Maru Gothic」と「Patrick Hand」を読み込む */
+    @import url('https://fonts.googleapis.com/css2?family=Patrick+Hand&family=Zen+Maru+Gothic:wght@400;700&display=swap');
+
+    /* =========================================
+       ★ 調整用の変数
+       ========================================= */
+    :root {
+      --text-main: #3d3a36;
+
+      /* カメラ枠の縦横比（幅÷高さ）。16:9 = 1.7778 / 3:2 = 1.5 */
+      --cam-aspect: 1.9778;
+
+      /* カメラ位置＝「世界（背景画像）の上から何%の所が画面の上端か」 */
+      --cam-y-river: 60%;   /* 川を見る時（黄色） */
+      --cam-y-house: 47%;   /* 家と看板を見る時（青） */
+
+      /* 家・看板の位置とサイズ（すべて世界＝背景画像に対する%） */
+      --house-top: 46%;  --house-left: 5%;  --house-width: 47%;
+      --sign-top: 50%;   --sign-left: 56%;   --sign-width: 25%;
+
+      /* アイテムが流れる範囲（川の位置・世界に対する%） */
+      --river-top: 77%;  --river-height: 10%;
+
+      /* タイトル画面のロゴ位置とサイズ */
+      --logo-top: 30%;
+      --logo-width: 50vw;
+      --logo-max-width: 350px;
+
+      /* タイトル画面のボタン位置とサイズ */
+      --btn-top: 55%;
+      --btn-gap: 80px;
+      --btn-width: 15vw;
+      --btn-max-width: 160px;
+    }
+
+    /* コピー・長押し防止 */
+    body, *, canvas, img, input, button {
+      -webkit-touch-callout: none; -webkit-user-select: none;
+      -khtml-user-select: none; -moz-user-select: none;
+      -ms-user-select: none; user-select: none;
+      -webkit-tap-highlight-color: transparent;
+      margin: 0; padding: 0; box-sizing: border-box;
+      /* ★ ここで Zen Maru Gothic を最優先に指定 */
+      font-family: "Zen Maru Gothic", "KFひま字", "はこにわかな", "Patrick Hand", sans-serif;
+    }
+
+    body {
+      overflow: hidden;
+      background-color: #fdfaf5;
+      color: var(--text-main);
+    }
+
+    .hidden { display: none !important; }
+
+    /* =========================================
+       カメラ枠（固定比率）と世界
+       ========================================= */
+    #viewport {
+      position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+      display: flex; justify-content: center; align-items: center;
+      overflow: hidden;
+      z-index: 1;
+    }
+
+    /* カメラ枠：画面に収まる最大サイズ。比率は常に固定 */
+    #camera {
+      position: relative;
+      width: min(100vw, calc(100vh * var(--cam-aspect)));
+      aspect-ratio: var(--cam-aspect);
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+
+    /* 世界：幅＝カメラ枠の幅。高さは背景画像の比率で決まる */
+    #world {
+      position: relative;
+      width: 100%;
+      container-type: inline-size;
+      transform: translateY(calc(var(--cam-y-river) * -1));
+      transition: transform 1s cubic-bezier(0.25, 1, 0.5, 1);
+    }
+    #world.scrolled-up {
+      transform: translateY(calc(var(--cam-y-house) * -1));
+    }
+
+    /* 背景と線のレイヤー */
+    #bg-img, #sen-img {
+      display: block; width: 100%; height: auto;
+      position: absolute; top: 0; left: 0;
+    }
+    
+    /* 背景のベース */
+    #bg-img { position: relative; z-index: 1; }
+    /* 線（手前） */
+    #sen-img { z-index: 2; pointer-events: none; }
+
+    /* 家 */
+    #house-img {
+      position: absolute; z-index: 3;
+      top: var(--house-top); left: var(--house-left); width: var(--house-width);
+    }
+
+    /* 看板 */
+    #sign-board-container {
+      position: absolute; z-index: 4; cursor: pointer;
+      top: var(--sign-top); left: var(--sign-left); width: var(--sign-width);
+      pointer-events: auto;
+    }
+    .sign-board-img { width: 100%; height: auto; display: block; }
+    .sign-text-img {
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      width: 80%; pointer-events: none;
+    }
+
+    /* 川 */
+    .river-img {
+      position: absolute; bottom: 0; left: 0; width: 100%; height: auto;
+      z-index: 2;
+    }
+
+    /* 流れるアイテムの層（川の上・世界の中） */
+    #item-layer {
+      position: absolute; left: 0; width: 100%;
+      top: var(--river-top); height: var(--river-height);
+      z-index: 5; pointer-events: none; overflow: hidden;
+    }
+
+    .item-wrapper {
+      position: absolute;
+      bottom: 10%;
+      left: -10cqw;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      animation: moveItem 15s linear forwards;
+    }
+
+    /* ★ すぐに表示されて流れるように修正 */
+    @keyframes moveItem {
+      0%   { opacity: 1; transform: translateX(0) translateY(0) rotate(-10deg); }
+      20%  { transform: translateX(30cqw) translateY(-25px) rotate(10deg); }
+      40%  { transform: translateX(60cqw) translateY(25px) rotate(-10deg); }
+      60%  { transform: translateX(90cqw) translateY(-25px) rotate(10deg); }
+      80%  { transform: translateX(120cqw) translateY(25px) rotate(-10deg); }
+      95%  { opacity: 1; }
+      100% { opacity: 0; transform: translateX(160cqw) translateY(0) rotate(10deg); }
+    }
+
+    .floating-item {
+      width: 8cqw; height: 8cqw;
+      background-size: contain; background-repeat: no-repeat; background-position: center;
+      display: flex; justify-content: center; align-items: center;
+    }
+    .mini-canvas { width: 80%; height: 80%; }
+
+    /* =========================================
+       タイトル画面のUI
+       ========================================= */
+    #title-ui {
+      position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
+      z-index: 10; pointer-events: none;
+      transition: opacity 0.3s;
+    }
+    #title-ui.hidden { opacity: 0; }
+
+    .logo-img {
+      position: absolute;
+      top: var(--logo-top);
+      left: 50%; transform: translateX(-50%);
+      width: var(--logo-width); max-width: var(--logo-max-width);
+      filter: drop-shadow(2px 4px 6px rgba(0,0,0,0.2));
+    }
+
+    .btn-row {
+      position: absolute;
+      top: var(--btn-top);
+      left: 50%; transform: translateX(-50%);
+      display: flex;
+      gap: var(--btn-gap);
+      pointer-events: auto;
+    }
+    .btn-img {
+      width: var(--btn-width); max-width: var(--btn-max-width);
+      cursor: pointer; transition: transform 0.1s;
+      filter: drop-shadow(2px 2px 0 rgba(0,0,0,0.1));
+    }
+    .btn-img:active { transform: scale(0.95); }
+
+    /* =========================================
+       メイン画面のUI
+       ========================================= */
+    #main-screen-ui {
+      position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
+      z-index: 10; pointer-events: none;
+    }
+
+    /* =========================================
+       左下のあいことば表示
+       ========================================= */
+    #room-code-display {
+      position: fixed;
+      bottom: 15px;
+      left: 15px;
+      color: white;
+      font-size: 14px;
+      font-weight: bold;
+      text-shadow: 1px 1px 3px rgba(0,0,0,0.8), 0 0 5px rgba(0,0,0,0.5);
+      z-index: 100;
+      pointer-events: none;
+      opacity: 0.9;
+    }
+
+    /* =========================================
+       中央に表示されるメッセージモーダル
+       ========================================= */
+    #center-modal {
+      position: fixed; top: 50%; left: 50%;
+      transform: translate(-50%, -50%) scale(0.9);
+      background: #faf8f5;
+      padding: 30px 40px;
+      border-radius: 255px 15px 225px 15px / 15px 225px 15px 255px;
+      border: 3px solid #3d3a36;
+      box-shadow: 5px 5px 0 rgba(0,0,0,0.1);
+      display: flex; flex-direction: column; justify-content: center; align-items: center;
+      z-index: 1000; opacity: 0; visibility: hidden;
+      transition: all 0.3s cubic-bezier(0.25, 1, 0.5, 1);
+    }
+    #center-modal.active {
+      opacity: 1; visibility: visible;
+      transform: translate(-50%, -50%) scale(1);
+    }
+
+    #modal-text { font-size: 18px; font-weight: bold; text-align: center; line-height: 1.6; margin: 0 0 20px 0; white-space: pre-wrap; }
+
+    .modal-input {
+      width: 220px; font-size: 16px; padding: 8px; border: 2px solid #b8c4bc; border-radius: 8px;
+      text-align: center; margin-bottom: 20px; pointer-events: auto; outline: none;
+    }
+    .modal-btn {
+      background: #7ea9e1; color: white; border: 2px solid #3d3a36;
+      padding: 10px 30px; border-radius: 255px 15px 225px 15px / 15px 225px 15px 255px;
+      font-size: 16px; font-weight: bold; cursor: pointer; box-shadow: 2px 2px 0 rgba(0,0,0,0.1);
+      pointer-events: auto;
+    }
+    .modal-btn:active { transform: scale(0.95); }
+
+    #overlay-black {
+      position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+      background: #000; z-index: 500; opacity: 0; pointer-events: none; transition: opacity 1s ease;
+    }
+    #overlay-black.active { opacity: 1; pointer-events: auto; }
+
+    /* =========================================
+       お絵かきモーダル
+       ========================================= */
+    #draw-modal {
+      position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+      background: rgba(20, 25, 20, 0.85); display: none; flex-direction: column;
+      justify-content: center; align-items: center; z-index: 2000; padding: 10px;
+      backdrop-filter: blur(6px);
+    }
+    .draw-content { display: flex; flex-direction: column; align-items: center; max-height: 100vh; }
+    .draw-content h3 { margin: 0 0 10px 0; color: #faf8f5; font-size: 18px; }
+
+    .item-preview {
+      width: min(50vh, 80vw); height: min(50vh, 80vw);
+      background-size: contain; background-repeat: no-repeat; background-position: center;
+      margin: 10px auto; position: relative; cursor: crosshair;
+    }
+    #drawing-canvas { width: 100%; height: 100%; touch-action: none; }
+
+    .item-select-group { display: flex; justify-content: center; gap: 8px; margin-bottom: 10px; }
+    .item-option {
+      width: 40px; height: 40px; background-size: contain; background-repeat: no-repeat; background-position: center;
+      border: 2px solid transparent; border-radius: 8px; cursor: pointer; transition: all 0.2s;
+    }
+    .item-option.active { border-color: #7ea9e1; transform: scale(1.1); background-color: rgba(255,255,255,0.2); }
+
+    .draw-tools { display: flex; gap: 20px; justify-content: center; margin-bottom: 10px; }
+    .tool-btn { background: transparent; border: none; cursor: pointer; width: 50px; height: 50px; }
+    .tool-btn img { width: 100%; height: 100%; object-fit: contain; mix-blend-mode: multiply; filter: drop-shadow(2px 2px 2px rgba(0,0,0,0.3)); }
+    .tool-btn.active { transform: scale(1.1); }
+    .tool-btn.active img { filter: drop-shadow(0px 0px 10px rgba(255, 255, 255, 0.8)) drop-shadow(2px 2px 2px rgba(0,0,0,0.3)); }
+    .tool-btn:not(.active) img { opacity: 0.6; }
+
+    .draw-buttons { display: flex; gap: 12px; justify-content: center; }
+    .btn-base {
+      border: 2px solid #3d3a36; padding: 10px 24px;
+      border-radius: 255px 15px 225px 15px / 15px 225px 15px 255px;
+      font-weight: bold; font-size: 15px; cursor: pointer;
+      box-shadow: 3px 3px 0 rgba(0,0,0,0.15); transition: transform 0.1s;
+      background: #faf8f5; color: #3d3a36;
+    }
+    .btn-base:active { transform: scale(0.95) translateY(2px); box-shadow: 1px 1px 0 rgba(0,0,0,0.15); }
+    .btn-primary { background: #7ea9e1; color: white; }
+
+  </style>
+
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+</head>
+<body>
+
+  <!-- =========================================
+       カメラ枠（固定比率）と世界
+       ========================================= -->
+  <div id="viewport">
+    <div id="camera">
+      <div id="world">
+        <!-- 背景と線を重ねる（固定） -->
+        <img src="bg-ground.png" id="bg-img" alt="">
+        <img src="sen.png" id="sen-img" alt="">
+
+        <img src="house.png" id="house-img" alt="郵便局">
+        <div id="sign-board-container" onclick="openDrawModal()">
+          <img src="sign-board.png" class="sign-board-img" alt="看板">
+          <img src="sign-text.png" class="sign-text-img" alt="かいてながす">
+        </div>
+
+        <img src="water1.png" class="river-img river-anim" alt="川">
+
+        <div id="item-layer"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- =========================================
+       タイトル画面のUI
+       ========================================= -->
+  <div id="title-ui">
+    <img src="logo.png" class="logo-img" alt="せせらぎ">
+    <div class="btn-row">
+      <img src="btn-play.png" class="btn-img" alt="あそぶ" onclick="startGame(false)">
+      <img src="btn-howto.png" class="btn-img" alt="せつめい" onclick="startGame(true)">
+    </div>
+  </div>
+
+  <!-- =========================================
+       メイン画面のUI
+       ========================================= -->
+  <div id="main-screen-ui" class="hidden"></div>
+
+  <!-- =========================================
+       左下のあいことば表示
+       ========================================= -->
+  <div id="room-code-display" class="hidden">あいことば：<span id="room-code-text"></span></div>
+
+  <!-- =========================================
+       中央メッセージモーダル
+       ========================================= -->
+  <div id="center-modal">
+    <p id="modal-text"></p>
+    <input type="text" id="modal-input" class="modal-input hidden" placeholder="あいことば">
+    <button class="modal-btn" id="modal-btn" onclick="nextStep()">次へ</button>
+  </div>
+
+  <div id="overlay-black"></div>
+
+  <!-- =========================================
+       お絵かきモーダル
+       ========================================= -->
+  <div id="draw-modal">
+    <div class="draw-content">
+      <h3>葉っぱや魚に描く</h3>
+      <div class="item-select-group">
+        <div class="item-option active" id="opt-leaf-green" style="background-image: url('leaf-green.png');" onclick="setItemType('leaf-green')"></div>
+        <div class="item-option" id="opt-leaf-orange" style="background-image: url('leaf-orange.png');" onclick="setItemType('leaf-orange')"></div>
+        <div class="item-option" id="opt-leaf-yellow" style="background-image: url('leaf-yellow.png');" onclick="setItemType('leaf-yellow')"></div>
+        <div class="item-option" id="opt-fish-blue" style="background-image: url('fish-blue.png');" onclick="setItemType('fish-blue')"></div>
+        <div class="item-option" id="opt-fish-gray" style="background-image: url('fish-gray.png');" onclick="setItemType('fish-gray')"></div>
+      </div>
+
+      <div class="draw-tools">
+        <button class="tool-btn" id="tool-undo" onclick="undoAction()"><img src="icon-undo.png" alt="戻す"></button>
+        <button class="tool-btn active" id="tool-pen" onclick="setTool('pen')"><img src="icon-pen.png" alt="ペン"></button>
+        <button class="tool-btn" id="tool-eraser" onclick="setTool('eraser')"><img src="icon-eraser.png" alt="消しゴム"></button>
+      </div>
+
+      <div class="item-preview" id="preview-item" style="background-image: url('leaf-green.png');">
+        <canvas id="drawing-canvas" width="600" height="600"></canvas>
+      </div>
+
+      <div class="draw-buttons">
+        <button class="btn-base btn-primary" onclick="sendMessage()">川に流す</button>
+        <button class="btn-base btn-secondary" onclick="closeDrawModal()">やめる</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    window.addEventListener('contextmenu', e => e.preventDefault());
+
+    // 川のコマ送りアニメーションのみ（背景と線は固定）
+    const waterFrames = ["water1.png", "water2.png", "water3.png"];
+    let frameIndex = 0;
+
+    setInterval(() => {
+      frameIndex++;
+      const wIndex = frameIndex % waterFrames.length;
+      document.querySelector(".river-anim").src = waterFrames[wIndex];
+    }, 400);
+
+    // Firebase設定
+    const firebaseConfig = {
+      apiKey: "AIzaSyCMsCeqr42sKJMWGdnBdCsj_GSBzqNpN1c",
+      authDomain: "seseragi-d08a1.firebaseapp.com",
+      databaseURL: "https://seseragi-d08a1-default-rtdb.firebaseio.com",
+      projectId: "seseragi-d08a1",
+      storageBucket: "seseragi-d08a1.appspot.com",
+      messagingSenderId: "438367791173",
+      appId: "1:438367791173:web:c2c36e4cb18d994d211b2c"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    let roomCode = "";
+    let roomRef = null;
+    let sessionLoadTime = Date.now();
+    let isDebug = false;
+
+    let mode = "";
+    let step = 0;
+
+    const world = document.getElementById('world');
+    const titleUi = document.getElementById('title-ui');
+    const centerModal = document.getElementById('center-modal');
+    const modalText = document.getElementById('modal-text');
+    const modalInput = document.getElementById('modal-input');
+    const modalBtn = document.getElementById('modal-btn');
+
+    function showCenterModal(text, showInput, btnText) {
+      modalText.innerText = text;
+      modalBtn.innerText = btnText;
+      if (showInput) {
+        modalInput.classList.remove('hidden');
+        modalInput.value = "";
+      } else {
+        modalInput.classList.add('hidden');
+      }
+      centerModal.classList.add('active');
+    }
+
+    function hideCenterModal() {
+      centerModal.classList.remove('active');
+    }
+
+    // ★ Pキーでデバッグモード起動
+    document.addEventListener("keydown", (e) => {
+      if (e.key.toLowerCase() === 'p' && step < 3) {
+        isDebug = true;
+        roomCode = "debug";
+        document.getElementById("room-code-text").innerText = "デバッグモード（一人用）";
+        document.getElementById("room-code-display").classList.remove("hidden");
+        
+        titleUi.classList.add('hidden');
+        hideCenterModal();
+        document.getElementById("main-screen-ui").classList.remove("hidden");
+        
+        world.classList.add("scrolled-up"); // 家と看板を見せる
+        step = 3;
+      }
+    });
+
+    function startGame(isHowTo) {
+      mode = isHowTo ? "howto" : "play";
+      step = 0;
+
+      titleUi.classList.add('hidden');
+
+      if (mode === "play") {
+        step = 1;
+        showCenterModal("あいことばを\n教えてね。", true, "決定");
+      } else {
+        step = 0;
+        showCenterModal("せせらぎは気軽な\nメッセージやりとりが\nできる場所だよ。", false, "次へ");
+      }
+    }
+
+    function nextStep() {
+      if (step === 0) {
+        step = 1;
+        showCenterModal("あいことばを\n教えてね。", true, "決定");
+      } else if (step === 1) {
+        const val = modalInput.value.trim();
+        if (!val) return alert("あいことばを入れてね！");
+        roomCode = val;
+
+        // 左下にあいことばを表示
+        document.getElementById("room-code-text").innerText = roomCode;
+        document.getElementById("room-code-display").classList.remove("hidden");
+
+        hideCenterModal();
+
+        if (mode === "play") {
+          document.getElementById("overlay-black").classList.add("active");
+          setTimeout(() => {
+            document.getElementById("overlay-black").classList.remove("active");
+            titleUi.classList.add('hidden');
+            document.getElementById("main-screen-ui").classList.remove("hidden");
+            step = 3;
+            watchRoom();
+          }, 1000);
+        } else {
+          document.getElementById("overlay-black").classList.add("active");
+          setTimeout(() => {
+            document.getElementById("overlay-black").classList.remove("active");
+            titleUi.classList.add('hidden');
+            document.getElementById("main-screen-ui").classList.remove("hidden");
+
+            step = 2;
+            showCenterModal("この川にみんなの\n手紙が流れてくるよ。", false, "次へ");
+          }, 1000);
+        }
+      } else if (step === 2) {
+        hideCenterModal();
+        // 自動で上にスクロールして看板を見せる
+        world.classList.add("scrolled-up");
+        setTimeout(() => {
+          showCenterModal("上にスクロールして看板を\nタップするとメッセージが送れるよ。", false, "わかった");
+          step = 2.5;
+        }, 1000); // スクロールアニメーション待ち
+      } else if (step === 2.5) {
+        hideCenterModal();
+        // 下にスクロールして戻す
+        world.classList.remove("scrolled-up");
+        step = 3;
+        watchRoom();
+      }
+    }
+
+    // --- スワイプ（カメラの上下移動） ---
+    let touchStartY = 0;
+    document.body.addEventListener("touchstart", (e) => {
+      touchStartY = e.touches[0].clientY;
+    }, {passive: true});
+
+    document.body.addEventListener("touchend", (e) => {
+      if ((step === 3 || isDebug) && !centerModal.classList.contains('active')) {
+        const touchEndY = e.changedTouches[0].clientY;
+        const diffY = touchStartY - touchEndY;
+
+        if (diffY > 50) {
+          world.classList.add("scrolled-up");
+        }
+        else if (diffY < -50) {
+          world.classList.remove("scrolled-up");
+        }
+      }
+    }, {passive: true});
+
+    // PC用のホイール
+    document.body.addEventListener("wheel", (e) => {
+      if ((step === 3 || isDebug) && !centerModal.classList.contains('active')) {
+        if (e.deltaY > 0) world.classList.remove("scrolled-up");
+        else world.classList.add("scrolled-up");
+      }
+    }, {passive: true});
+
+
+    // --- Firebase ---
+    function watchRoom() {
+      if (!roomCode || isDebug) return;
+      roomRef = db.ref("rooms/" + roomCode + "/items");
+
+      roomRef.on("child_added", (snapshot) => {
+        const data = snapshot.val();
+        if (data.timestamp && data.timestamp > sessionLoadTime) {
+          spawnFloatingItem(data);
+        }
+      });
+    }
+
+    // --- お絵かき ---
+    let currentItemType = "leaf-green";
+    let isDrawing = false, undoHistory = [], currentStrokeData = null, currentTool = "pen";
+    const drawCanvas = document.getElementById("drawing-canvas");
+    const drawCtx = drawCanvas.getContext("2d");
+    drawCtx.lineCap = "round"; drawCtx.lineJoin = "round";
+    const previewItem = document.getElementById("preview-item");
+
+    function openDrawModal() {
+      // チュートリアル中の看板タップはスキップして直接開く
+      if (step === 2 || step === 2.5) {
+        step = 3;
+        hideCenterModal();
+        titleUi.classList.add('hidden');
+        document.getElementById("main-screen-ui").classList.remove("hidden");
+        watchRoom();
+      } else if (step !== 3 && !isDebug) {
+        if(confirm("チュートリアルを終わらせますか？")) {
+          step = 3;
+          hideCenterModal();
+          titleUi.classList.add('hidden');
+          document.getElementById("main-screen-ui").classList.remove("hidden");
+          if(!roomCode) { 
+            roomCode = "test"; 
+            document.getElementById("room-code-text").innerText = roomCode;
+            document.getElementById("room-code-display").classList.remove("hidden");
+            watchRoom(); 
+          }
+        } else {
+          return;
+        }
+      }
+
+      world.classList.add("scrolled-up");
+
+      clearDrawingCanvas(); setTool("pen");
+      document.getElementById("draw-modal").style.display = "flex";
+    }
+
+    function closeDrawModal() {
+      document.getElementById("draw-modal").style.display = "none";
+    }
+
+    function setItemType(type) {
+      currentItemType = type;
+      previewItem.style.backgroundImage = `url('${type}.png')`;
+      document.querySelectorAll(".item-option").forEach(opt => opt.classList.remove("active"));
+      document.getElementById(`opt-${type}`).classList.add("active");
+      clearDrawingCanvas();
+    }
+
+    function setTool(tool) {
+      currentTool = tool;
+      document.getElementById("tool-pen").classList.toggle("active", tool === "pen");
+      document.getElementById("tool-eraser").classList.toggle("active", tool === "eraser");
+    }
+
+    function undoAction() { if (undoHistory.length > 0) { undoHistory.pop(); redraw(); } }
+
+    drawCanvas.addEventListener("mousedown", startDraw);
+    drawCanvas.addEventListener("mousemove", drawMove);
+    drawCanvas.addEventListener("mouseup", endDraw);
+    drawCanvas.addEventListener("mouseleave", endDraw);
+    drawCanvas.addEventListener("touchstart", (e) => { startDraw(e.touches[0]); e.preventDefault(); }, {passive: false});
+    drawCanvas.addEventListener("touchmove", (e) => { drawMove(e.touches[0]); e.preventDefault(); }, {passive: false});
+    drawCanvas.addEventListener("touchend", endDraw);
+
+    function getPos(e) {
+      const r = drawCanvas.getBoundingClientRect();
+      return { x: (e.clientX - r.left) * (drawCanvas.width / r.width), y: (e.clientY - r.top) * (drawCanvas.height / r.height) };
+    }
+
+    function startDraw(e) {
+      isDrawing = true;
+      const p = getPos(e);
+      currentStrokeData = { tool: currentTool, color: currentItemType.includes("fish") ? "#ffffff" : "#3d3a36", width: currentTool === "eraser" ? 30 : 5, points: [p] };
+      drawCtx.beginPath(); drawCtx.moveTo(p.x, p.y);
+    }
+
+    function drawMove(e) {
+      if (!isDrawing || !currentStrokeData) return;
+      const p = getPos(e);
+      currentStrokeData.points.push(p);
+      drawCtx.globalCompositeOperation = currentTool === "eraser" ? "destination-out" : "source-over";
+      drawCtx.strokeStyle = currentTool === "eraser" ? "#000" : currentStrokeData.color;
+      drawCtx.lineWidth = currentStrokeData.width;
+      drawCtx.lineTo(p.x, p.y); drawCtx.stroke();
+    }
+
+    function endDraw() {
+      if (!isDrawing) return;
+      isDrawing = false;
+      if (currentStrokeData && currentStrokeData.points.length > 0) undoHistory.push(currentStrokeData);
+      currentStrokeData = null;
+    }
+
+    function redraw() {
+      drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+      undoHistory.forEach(s => {
+        drawCtx.globalCompositeOperation = s.tool === "eraser" ? "destination-out" : "source-over";
+        drawCtx.strokeStyle = s.tool === "eraser" ? "#000" : s.color;
+        drawCtx.lineWidth = s.width;
+        drawCtx.beginPath(); drawCtx.moveTo(s.points[0].x, s.points[0].y);
+        for (let i = 1; i < s.points.length; i++) drawCtx.lineTo(s.points[i].x, s.points[i].y);
+        drawCtx.stroke();
+      });
+      drawCtx.globalCompositeOperation = "source-over";
+    }
+
+    function clearDrawingCanvas() { drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height); undoHistory = []; }
+
+    function sendMessage() {
+      const data = undoHistory.map(s => ({ tool: s.tool, points: s.points }));
+      
+      // ★ デバッグモードならサーバー送らずにローカルで流す
+      if (isDebug) {
+        spawnFloatingItem({ type: currentItemType, strokes: data });
+      } else {
+        if(!roomRef) return;
+        roomRef.push({ type: currentItemType, strokes: data, timestamp: firebase.database.ServerValue.TIMESTAMP });
+      }
+      
+      closeDrawModal();
+    }
+
+    // 左から右へゆらゆら流れるアイテム
+    function spawnFloatingItem(data) {
+      const layer = document.getElementById("item-layer");
+      const wrap = document.createElement("div");
+      wrap.className = "item-wrapper";
+
+      // 縦の位置を川の範囲内でランダムにする（川の層に対する%）
+      wrap.style.bottom = `${Math.random() * 60 + 5}%`;
+
+      const item = document.createElement("div");
+      item.className = "floating-item";
+      item.style.backgroundImage = `url('${data.type}.png')`;
+
+      const canvas = document.createElement("canvas");
+      canvas.className = "mini-canvas"; canvas.width = 100; canvas.height = 100;
+      const ctx = canvas.getContext("2d");
+      ctx.lineCap = "round"; ctx.lineJoin = "round";
+
+      if (data.strokes) {
+        data.strokes.forEach(s => {
+          if (!s.points || s.points.length === 0) return;
+          ctx.globalCompositeOperation = s.tool === "eraser" ? "destination-out" : "source-over";
+          ctx.strokeStyle = s.tool === "eraser" ? "#000" : (data.type.includes("fish") ? "#ffffff" : "#3d3a36");
+          ctx.lineWidth = (s.tool === "eraser" ? 30 : 5) * (100 / 600);
+          ctx.beginPath();
+          const scale = 100 / 600;
+          ctx.moveTo(s.points[0].x * scale, s.points[0].y * scale);
+          for (let i = 1; i < s.points.length; i++) ctx.lineTo(s.points[i].x * scale, s.points[i].y * scale);
+          ctx.stroke();
+        });
+      }
+      ctx.globalCompositeOperation = "source-over";
+
+      item.appendChild(canvas); wrap.appendChild(item); layer.appendChild(wrap);
+
+      // ★ すぐ流れ始めるように時間を少し短縮
+      const duration = 15 + Math.random() * 5; 
+      wrap.style.animationDuration = duration + "s";
+      setTimeout(() => wrap.remove(), duration * 1000);
+    }
+
+  </script>
+</body>
+</html>
